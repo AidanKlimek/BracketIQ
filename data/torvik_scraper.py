@@ -67,7 +67,7 @@ def _load_cache(filepath: Path) -> str:
 # HTTP Helpers
 # =============================================================================
 
-def _fetch(url: str, delay: float = None) -> str:
+def _fetch(url: str, delay: float | None = None) -> str:
     """
     Make a GET request with polite delay and error handling.
     Returns raw response text.
@@ -83,7 +83,7 @@ def _fetch(url: str, delay: float = None) -> str:
     return resp.text
 
 
-def _fetch_gzip(url: str, delay: float = None) -> str:
+def _fetch_gzip(url: str, delay: float | None = None) -> str:
     """Fetch and decompress a gzipped JSON file (for time machine data)."""
     if delay is None:
         delay = TORVIK_REQUEST_DELAY
@@ -101,7 +101,7 @@ def _fetch_gzip(url: str, delay: float = None) -> str:
 # Core Data Fetchers
 # =============================================================================
 
-def fetch_team_results(year: int = None, force_refresh: bool = False) -> pd.DataFrame:
+def fetch_team_results(year: int | None = None, force_refresh: bool = False) -> pd.DataFrame:
     """
     Fetch full season team results from Torvik CSV endpoint.
 
@@ -147,15 +147,20 @@ def fetch_team_results(year: int = None, force_refresh: bool = False) -> pd.Data
 
 def _parse_team_results_csv(raw_csv: str) -> pd.DataFrame:
     """Parse the raw CSV text into a cleaned DataFrame."""
-    df = pd.read_csv(io.StringIO(raw_csv))
+    # Fix older Torvik CSVs where the last header "Fun Rk, adjt" is a quoted
+    # string with a comma, but represents TWO data columns. This creates a
+    # mismatch: 44 headers but 45 data fields, shifting everything right.
+    fixed_csv = raw_csv.replace('"Fun Rk, adjt"', 'fun_rk,adjt')
 
-    # Standardize column names — Torvik's CSV headers can vary slightly
+    df = pd.read_csv(io.StringIO(fixed_csv))
+
+    # Standardize column names
     df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
 
     # Ensure numeric types for key columns
     numeric_cols = [
         "barthag", "adj_o", "adj_d", "adj_t",
-        "wab", "seed",
+        "wab", "seed", "adjoe", "adjde",
     ]
     for col in numeric_cols:
         if col in df.columns:
@@ -165,7 +170,7 @@ def _parse_team_results_csv(raw_csv: str) -> pd.DataFrame:
     return df
 
 
-def fetch_four_factors(year: int = None, force_refresh: bool = False) -> pd.DataFrame:
+def fetch_four_factors(year: int | None = None, force_refresh: bool = False) -> pd.DataFrame:
     """
     Fetch four factors data from Torvik's team slice JSON endpoint.
 
@@ -220,11 +225,37 @@ def _parse_four_factors_json(raw_json: str) -> pd.DataFrame:
 
     df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
 
-    # Coerce numeric columns
+    # Handle duplicate column names by appending a suffix
+    seen = {}
+    new_cols = []
+    for col in df.columns:
+        if col in seen:
+            seen[col] += 1
+            new_cols.append(f"{col}_{seen[col]}")
+        else:
+            seen[col] = 0
+            new_cols.append(col)
+    df.columns = new_cols
+
+    # Drop columns that contain nested objects (dicts, lists)
+    cols_to_drop = []
+    for col in df.columns:
+        if df[col].apply(lambda x: isinstance(x, (dict, list))).any():
+            logger.debug(f"Dropping nested column: {col}")
+            cols_to_drop.append(col)
+    df = df.drop(columns=cols_to_drop)
+
+    # Coerce numeric columns (only attempt on string/object columns)
     skip = {"team", "conf", "rec", "conference", "name"}
     for col in df.columns:
         if col not in skip:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+            try:
+                converted = pd.to_numeric(df[col], errors="coerce")
+                # Only apply if we actually got some numeric values out of it
+                if converted.notna().any():
+                    df[col] = converted
+            except (TypeError, ValueError):
+                pass
 
     logger.info(f"Parsed {len(df)} teams from Torvik four factors JSON.")
     return df
@@ -286,7 +317,7 @@ def fetch_pre_tournament_snapshot(year: int, force_refresh: bool = False) -> pd.
 # Convenience: Merge All Torvik Data Into One DataFrame
 # =============================================================================
 
-def fetch_all_torvik_data(year: int = None, force_refresh: bool = False) -> pd.DataFrame:
+def fetch_all_torvik_data(year: int | None = None, force_refresh: bool = False) -> pd.DataFrame:
     """
     Fetch and merge team results + four factors into one comprehensive DataFrame.
 
@@ -338,6 +369,9 @@ def fetch_all_torvik_data(year: int = None, force_refresh: bool = False) -> pd.D
         suffixes=("", "_ff"),
     )
 
+    # Ensure all column names are strings
+    merged.columns = [str(c) for c in merged.columns]
+
     # Drop duplicate columns from the merge (keep the first occurrence)
     dupe_cols = [c for c in merged.columns if c.endswith("_ff")]
     for col in dupe_cols:
@@ -348,6 +382,26 @@ def fetch_all_torvik_data(year: int = None, force_refresh: bool = False) -> pd.D
         else:
             merged = merged.rename(columns={col: base_col})
     merged = merged.drop(columns=[c for c in merged.columns if c.endswith("_ff")], errors="ignore")
+
+    # Standardize Torvik column names to our internal naming convention
+    col_rename = {
+        "adjoe": "adj_o",
+        "adjde": "adj_d",
+        "barthag": "barthag",
+        "adj_t": "adj_t",
+        "adjt": "adj_t",
+        "oe_rank": "adj_o_rank",
+        "de_rank": "adj_d_rank",
+        "off_efg": "off_efg",
+        "off_to": "off_to",
+        "off_or": "off_or",
+        "off_ftr": "off_ftr",
+        "def_efg": "def_efg",
+        "def_to": "def_to",
+        "def_or": "def_or",
+        "def_ftr": "def_ftr",
+    }
+    merged = merged.rename(columns={k: v for k, v in col_rename.items() if k in merged.columns})
 
     # Add computed columns
     if "adj_o" in merged.columns and "adj_d" in merged.columns:
@@ -374,7 +428,7 @@ def _find_team_column(df: pd.DataFrame) -> str | None:
 # Fetch Historical Data for Backtesting
 # =============================================================================
 
-def fetch_historical_torvik(years: list[int] = None, force_refresh: bool = False) -> dict[int, pd.DataFrame]:
+def fetch_historical_torvik(years: list[int] | None = None, force_refresh: bool = False) -> dict[int, pd.DataFrame]:
     """
     Fetch Torvik data for multiple historical years.
 
@@ -416,7 +470,7 @@ def fetch_historical_torvik(years: list[int] = None, force_refresh: bool = False
 # Diagnostic / Exploration Helpers
 # =============================================================================
 
-def print_available_columns(year: int = None):
+def print_available_columns(year: int | None = None):
     """Print all available columns from Torvik data — useful for exploration."""
     df = fetch_all_torvik_data(year)
     print(f"\n📊 Torvik Data Columns ({len(df.columns)} total):\n")
@@ -426,7 +480,7 @@ def print_available_columns(year: int = None):
         print(f"  {i:3d}. {col:<30s} ({dtype}) — e.g., {sample}")
 
 
-def get_team(team_name: str, year: int = None) -> pd.Series | None:
+def get_team(team_name: str, year: int | None = None) -> pd.Series | None:
     """Quick lookup for a single team's stats."""
     df = fetch_all_torvik_data(year)
     team_col = _find_team_column(df)
@@ -468,6 +522,9 @@ if __name__ == "__main__":
     print("\n   Looking up 'Duke':")
     duke = get_team("Duke")
     if duke is not None:
-        print(f"   {duke.get('team', 'N/A')} — AdjO: {duke.get('adj_o', 'N/A')}, AdjD: {duke.get('adj_d', 'N/A')}")
+        adj_o = duke.get("adj_o", duke.get("adjoe", "N/A"))
+        adj_d = duke.get("adj_d", duke.get("adjde", "N/A"))
+        net = duke.get("net_efficiency", "N/A")
+        print(f"   {duke.get('team', 'N/A')} — AdjO: {adj_o}, AdjD: {adj_d}, Net: {net}")
 
     print("\n✅ Torvik scraper test complete.")

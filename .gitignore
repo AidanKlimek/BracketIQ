@@ -1,0 +1,71 @@
+# =============================================================================
+# BracketIQ .gitignore
+# =============================================================================
+
+# --- Environment & Secrets ---
+.env
+.env.local
+.env.production
+config/secrets.py
+*.pem
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+eggs/
+*.whl
+pip-log.txt
+pip-delete-this-directory.txt
+
+# --- Virtual Environment ---
+venv/
+env/
+.venv/
+ENV/
+
+# --- Cached Data (scraped CSVs, JSONs, etc.) ---
+data/cache/
+data/raw/
+data/exports/
+*.csv
+*.json
+!config/*.json
+!package.json
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Streamlit ---
+.streamlit/secrets.toml
+
+# --- Jupyter Notebooks (if used for exploration) ---
+.ipynb_checkpoints/
+
+# --- OS ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Distribution / Build ---
+*.manifest
+*.spec

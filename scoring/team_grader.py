@@ -102,18 +102,12 @@ def normalize_all_stats(df: pd.DataFrame) -> pd.DataFrame:
 
     all_weight_stats = set(BASE_WEIGHTS.keys()) | set(CONTEXT_WEIGHTS.keys()) | set(TOURNAMENT_WEIGHTS.keys())
 
-    found = [col for col in all_weight_stats if col in result.columns]
-    not_found = [col for col in all_weight_stats if col not in result.columns]
-    logger.info(f"Found weight columns: {sorted(found)}")
-    logger.info(f"Missing weight columns: {sorted(not_found)}")
-
     normalized_count = 0
     for col in all_weight_stats:
         if col not in result.columns:
             continue
 
         polarity = STAT_POLARITY.get(col)
-        logger.debug(f"  Column '{col}': polarity={polarity}")
         if polarity is None:
             # Neutral stat — skip normalization
             continue
@@ -253,7 +247,33 @@ def grade_all_teams(torvik_df: pd.DataFrame, espn_data: dict | None = None) -> p
                         df[key] = np.nan
                     df.at[idx, key] = value
 
-    # Step 3: Normalize all stats to percentiles
+    # Step 3: Add archetype similarity scores
+    try:
+        from scoring.archetype import build_archetype_from_data, add_archetype_scores
+        from data.torvik_scraper import fetch_team_results
+        from config.weights import HISTORICAL_YEARS
+
+        historical = {}
+        for year in HISTORICAL_YEARS:
+            try:
+                hist_df = fetch_team_results(year)
+                if not hist_df.empty:
+                    historical[year] = hist_df
+            except Exception:
+                pass
+
+        if historical:
+            archetype = build_archetype_from_data(historical)
+            if archetype:
+                # Normalize first so archetype can compare percentiles
+                temp_df = normalize_all_stats(df)
+                temp_df = add_archetype_scores(temp_df, archetype)
+                df["archetype_similarity"] = temp_df["archetype_similarity"]
+                logger.info("Archetype scores added to grading.")
+    except Exception as e:
+        logger.warning(f"Archetype scoring skipped: {e}")
+
+    # Step 4: Normalize all stats to percentiles
     df = normalize_all_stats(df)
 
     # Step 4: Grade each team
@@ -344,7 +364,7 @@ def print_team_report(report: dict) -> None:
 # =============================================================================
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     print("🏀 BracketIQ — Team Grader Test\n")
 
@@ -352,13 +372,7 @@ if __name__ == "__main__":
 
     print("Fetching data...")
     torvik_df = fetch_all_torvik_data()
-    # Debug: check suspect columns
-    duke_row = torvik_df[torvik_df["team"].str.contains("Duke", na=False)].iloc[0]
-    for col in ["barthag", "qual_o", "qual_d", "qual_games", "qual_barthag", "sos", "elite_sos", "elite_noncon_sos"]:
-        if col in torvik_df.columns:
-            val = duke_row[col]
-            print(f"  DEBUG {col}: value={val}, type={type(val).__name__}")
-            
+
     # Grade all teams
     print("\nGrading all teams...")
     rankings = grade_all_teams(torvik_df)

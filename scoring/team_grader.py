@@ -330,6 +330,44 @@ def print_team_report(report: dict) -> None:
         print("No report available.")
         return
 
+    DISPLAY_NAMES = {
+    "adj_o": "Offensive Efficiency",
+    "adj_d": "Defensive Efficiency",
+    "net_efficiency": "Net Efficiency",
+    "barthag": "Power Rating",
+    "off_efg": "Effective FG%",
+    "off_to": "Turnover Rate",
+    "off_or": "Off. Rebound Rate",
+    "off_ftr": "Free Throw Rate",
+    "def_efg": "Opp. Effective FG%",
+    "def_to": "Forced Turnover Rate",
+    "def_or": "Opp. Off. Rebound Rate",
+    "def_ftr": "Opp. Free Throw Rate",
+    "three_pct": "3-Point %",
+    "ft_pct": "Free Throw %",
+    "sos_overall": "Strength of Schedule",
+    "sos_noncon": "Non-Conference SOS",
+    "sos_elite": "Elite SOS",
+    "sos_elite_noncon": "Elite Non-Con SOS",
+    "wab": "Wins Above Bubble",
+    "qual_o": "Quality Game Offense",
+    "qual_d": "Quality Game Defense",
+    "qual_games": "Quality Games Played",
+    "qual_barthag": "Quality Game Power",
+    "close_game_record": "Close Game Record",
+    "volatility_scoring": "Scoring Consistency",
+    "volatility_turnovers": "Turnover Consistency",
+    "volatility_ft_pct": "FT% Consistency",
+    "trend_scoring_margin": "Margin Trend",
+    "trend_off_efficiency": "Offense Trend",
+    "trend_def_efficiency": "Defense Trend",
+    "archetype_similarity": "Champion Profile Match",
+    "tempo": "Tempo",
+    "seed_bonus": "Seed Bonus",
+    "conf_tournament_result": "Conf. Tournament Result",
+    "ft_pct_close_games": "FT% in Close Games",
+    "ft_consistency": "FT% Consistency",
+}
     team = report["team"]
     conf = report.get("conf", "")
     print(f"\n{'='*60}")
@@ -350,11 +388,11 @@ def print_team_report(report: dict) -> None:
 
         print(f"\n  {tier_name.upper()} — Top Strengths:")
         for stat, info in sorted_stats[:3]:
-            print(f"    {stat:<30s} {info['value']:>5.1f}%ile  (contributes {info['contribution']:>5.1f})")
+            print(f"    {DISPLAY_NAMES.get(stat, stat):<30s} {info['value']:>5.1f}%ile  (contributes {info['contribution']:>5.1f})")
 
         print(f"  {tier_name.upper()} — Weaknesses:")
         for stat, info in sorted_stats[-3:]:
-            print(f"    {stat:<30s} {info['value']:>5.1f}%ile  (contributes {info['contribution']:>5.1f})")
+            print(f"    {DISPLAY_NAMES.get(stat, stat):<30s} {info['value']:>5.1f}%ile  (contributes {info['contribution']:>5.1f})")
 
     print()
 

@@ -26,7 +26,12 @@ from data.espn_scraper import (
     fetch_team_season_boxscores,
 )
 from scoring.trend import compute_all_espn_stats
-
+from config.tournament import (
+    get_tournament_team_names,
+    get_team_seed,
+    get_conf_tourney_score,
+    TOURNAMENT_FINALIZED,
+)
 from config.weights import CURRENT_YEAR
 
 logger = logging.getLogger(__name__)
@@ -36,16 +41,18 @@ def build_full_dataset(
     team_names: list[str] | None = None,
     year: int | None = None,
     force_refresh: bool = False,
+    tournament_only: bool = False,
 ) -> pd.DataFrame:
     """
     Build the complete dataset by merging Torvik + ESPN data.
 
     Args:
         team_names: List of team names to pull ESPN data for.
-                    If None, only Torvik data is used (fast, but partial).
-                    Pass tournament team names for full scoring.
+                    If None and tournament_only=True, uses tournament roster.
+                    If None and tournament_only=False, Torvik only (fast).
         year: Season year. Defaults to CURRENT_YEAR.
         force_refresh: Bypass all caches.
+        tournament_only: If True, auto-load tournament teams from config.
 
     Returns:
         DataFrame with one row per team, all available stats merged.
@@ -57,6 +64,15 @@ def build_full_dataset(
     logger.info("Loading Torvik data...")
     torvik_df = fetch_all_torvik_data(year, force_refresh)
     logger.info(f"  Torvik: {len(torvik_df)} teams, {len(torvik_df.columns)} columns.")
+
+    # Auto-detect tournament teams if requested
+    if team_names is None and tournament_only:
+        team_names = get_tournament_team_names()
+        if team_names:
+            logger.info(f"  Loaded {len(team_names)} teams from tournament roster.")
+        else:
+            logger.info("  Tournament roster not set. Falling back to top 68 by WAB.")
+            team_names = get_tournament_teams(torvik_df)
 
     # If no ESPN teams requested, return Torvik only
     if not team_names:
@@ -90,6 +106,9 @@ def build_full_dataset(
     # Step 3: Merge ESPN stats into Torvik DataFrame
     if espn_stats:
         torvik_df = _merge_espn_into_torvik(torvik_df, espn_stats)
+
+    # Step 4: Add tournament-specific data (seeds, conf tourney results)
+    torvik_df = _add_tournament_data(torvik_df)
 
     logger.info(f"Final dataset: {len(torvik_df)} teams, {len(torvik_df.columns)} columns.")
     return torvik_df
@@ -137,6 +156,50 @@ def _merge_espn_into_torvik(torvik_df: pd.DataFrame, espn_stats: dict[str, dict]
 
     logger.info(f"Merged ESPN data: {matched}/{len(espn_stats)} teams matched.")
     return df
+
+
+def _add_tournament_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add tournament-specific data: seeds, conference tournament results.
+
+    Reads from config/tournament.py which is manually maintained.
+    """
+    result = df.copy()
+
+    # Add seed bonus (from tournament roster)
+    if "seed_bonus" not in result.columns:
+        result["seed_bonus"] = np.nan
+
+    # Add conference tournament results
+    if "conf_tournament_result" not in result.columns:
+        result["conf_tournament_result"] = np.nan
+
+    seeds_added = 0
+    conf_added = 0
+
+    for idx, row in result.iterrows():
+        team_name = row.get("team", "")
+        if not isinstance(team_name, str):
+            continue
+
+        # Seed bonus: convert seed to a 0-100 scale (1 seed = 100, 16 seed = 0)
+        seed = get_team_seed(team_name)
+        if seed is not None:
+            result.at[idx, "seed_bonus"] = max(0, 100 - (seed - 1) * (100 / 16))
+            seeds_added += 1
+
+        # Conference tournament result (already 0-100 scale)
+        conf_score = get_conf_tourney_score(team_name)
+        if conf_score > 0:
+            result.at[idx, "conf_tournament_result"] = conf_score
+            conf_added += 1
+
+    if seeds_added > 0:
+        logger.info(f"Added seeds for {seeds_added} tournament teams.")
+    if conf_added > 0:
+        logger.info(f"Added conference tournament results for {conf_added} teams.")
+
+    return result
 
 
 def get_tournament_teams(torvik_df: pd.DataFrame) -> list[str]:

@@ -2,13 +2,18 @@
 BracketIQ - CLI Entry Point
 ===============================
 Usage:
-    python main.py rank                         # Top 25 power rankings (Torvik only, fast)
-    python main.py rank --full                  # Full rankings with ESPN data for top 68
-    python main.py score "Duke"                 # Detailed report for one team
+    python main.py rank                         # Quick rankings (Torvik only, fast)
+    python main.py rank --full                  # Full rankings with ESPN for top 68
+    python main.py rank --tournament            # Rankings for tournament teams only
+    python main.py score "Duke"                 # Detailed report for one team (with ESPN)
     python main.py matchup "Duke" "Houston"     # Head-to-head matchup analysis
     python main.py export                       # Export rankings to CSV
-    python main.py export --full                # Export full rankings (with ESPN) to CSV
-    python main.py backtest                     # Validate model against 2021-2025 tournaments
+    python main.py export --full                # Export full rankings to CSV
+    python main.py backtest                     # Validate model against 2021-2025
+    python main.py cache status                 # Show cache status
+    python main.py cache clear                  # Clear all caches
+    python main.py cache clear-current          # Clear current season (keep historical)
+    python main.py refresh                      # Clear current season cache and re-rank
 """
 
 import sys
@@ -18,20 +23,24 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def cmd_rank(full: bool = False):
+def cmd_rank(full: bool = False, tournament: bool = False):
     """Generate and display power rankings."""
-    from data.torvik_scraper import fetch_all_torvik_data
     from data.integrator import build_full_dataset, get_tournament_teams
+    from data.torvik_scraper import fetch_all_torvik_data
     from scoring.team_grader import grade_all_teams
 
-    if full:
-        print("🏀 Building full rankings (Torvik + ESPN)...\n")
+    if tournament:
+        print("🏀 Building tournament rankings (Torvik + ESPN)...\n")
+        df = build_full_dataset(tournament_only=True)
+    elif full:
+        print("🏀 Building full rankings (Torvik + ESPN for top 68)...\n")
         torvik_df = fetch_all_torvik_data()
         team_names = get_tournament_teams(torvik_df)
-        print(f"   Pulling ESPN data for {len(team_names)} teams (this may take a while)...\n")
+        print(f"   Pulling ESPN data for {len(team_names)} teams...\n")
         df = build_full_dataset(team_names=team_names)
     else:
-        print("🏀 Building rankings (Torvik only — use --full for ESPN data)...\n")
+        print("🏀 Building quick rankings (Torvik only)...\n")
+        print("   Tip: Use --full or --tournament for ESPN-enhanced rankings.\n")
         df = fetch_all_torvik_data()
 
     rankings = grade_all_teams(df)
@@ -53,11 +62,11 @@ def cmd_rank(full: bool = False):
 
 
 def cmd_score(team_name: str):
-    """Detailed scoring report for a single team."""
+    """Detailed scoring report for a single team (always uses ESPN)."""
     from data.integrator import build_full_dataset
     from scoring.team_grader import get_team_report, print_team_report
 
-    print(f"🏀 Scoring {team_name} (with ESPN data)...\n")
+    print(f"🏀 Scoring {team_name} (Torvik + ESPN)...\n")
     df = build_full_dataset(team_names=[team_name])
     report = get_team_report(team_name, df)
     if report:
@@ -67,7 +76,7 @@ def cmd_score(team_name: str):
 
 
 def cmd_matchup(team_a_name: str, team_b_name: str):
-    """Head-to-head matchup analysis."""
+    """Head-to-head matchup analysis (always uses ESPN)."""
     import numpy as np
     from data.integrator import build_full_dataset
     from scoring.team_grader import grade_all_teams
@@ -98,14 +107,53 @@ def cmd_matchup(team_a_name: str, team_b_name: str):
 
     result = analyze_matchup(a_stats, b_stats, a_score, b_score)
     print_matchup(result)
+
+    # Offer CSV export
+    from output.csv_export import export_matchup
+    export_matchup(result)
+
     return result
 
 
-def cmd_export(full: bool = False):
+def cmd_export(full: bool = False, tournament: bool = False):
     """Export rankings to CSV."""
     from output.csv_export import export_rankings
-    rankings = cmd_rank(full=full)
+    rankings = cmd_rank(full=full, tournament=tournament)
     export_rankings(rankings)
+
+
+def cmd_cache(action: str):
+    """Manage data caches."""
+    from data.cache_manager import (
+        cache_status, clear_all, clear_espn, clear_torvik,
+        clear_current_season, clear_espn_games,
+    )
+
+    actions = {
+        "status": cache_status,
+        "clear": clear_all,
+        "clear-espn": clear_espn,
+        "clear-espn-games": clear_espn_games,
+        "clear-torvik": clear_torvik,
+        "clear-current": clear_current_season,
+    }
+
+    func = actions.get(action)
+    if func:
+        func()
+    else:
+        print(f"Unknown cache action: {action}")
+        print(f"Available: {', '.join(actions.keys())}")
+
+
+def cmd_refresh():
+    """Clear current season caches and re-run full rankings."""
+    from data.cache_manager import clear_current_season
+
+    print("🔄 Refreshing all current season data...\n")
+    clear_current_season()
+    print()
+    cmd_rank(full=True)
 
 
 def main():
@@ -119,7 +167,8 @@ def main():
 
     if command == "rank":
         full = "--full" in args
-        cmd_rank(full=full)
+        tournament = "--tournament" in args
+        cmd_rank(full=full, tournament=tournament)
 
     elif command == "score":
         if len(args) < 2:
@@ -135,11 +184,19 @@ def main():
 
     elif command == "export":
         full = "--full" in args
-        cmd_export(full=full)
+        tournament = "--tournament" in args
+        cmd_export(full=full, tournament=tournament)
 
     elif command == "backtest":
         from backtest.validate import run_backtest
         run_backtest()
+
+    elif command == "cache":
+        action = args[1] if len(args) > 1 else "status"
+        cmd_cache(action)
+
+    elif command == "refresh":
+        cmd_refresh()
 
     else:
         print(f"Unknown command: {command}")
